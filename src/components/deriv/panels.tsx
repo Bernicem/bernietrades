@@ -422,7 +422,7 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
               <tbody>{res.folds.map((f) => <tr key={f.fold} className="border-t border-border text-center"><td className="py-1">{f.fold}</td><td>{f.from + 1}–{f.to}</td>
                 {f.perf === null ? <td colSpan={5} className="text-muted-foreground">Insufficient data — no threshold had enough trades to choose</td>
                   : f.perf.trades === 0 ? <><td>{f.z}</td><td colSpan={4} className="text-muted-foreground">No eligible trades</td></>
-                  : <><td>{f.z}</td><td>{f.perf.trades}{f.perf.trades < MIN_RELIABLE_TRADES && <span className="text-muted-foreground">*</span>}</td><td>{pct(f.perf.winRate)}</td><td className={f.perf.ev > 0 ? "text-success" : "text-destructive"}>{f.perf.ev.toFixed(3)}</td><td>{f.perf.maxDD.toFixed(2)}</td></>}
+                  : <><td>{f.z}</td><td>{f.perf!.trades}{f.perf!.trades < MIN_RELIABLE_TRADES && <span className="text-muted-foreground">*</span>}</td><td>{pct(f.perf.winRate)}</td><td className={f.perf.ev > 0 ? "text-success" : "text-destructive"}>{f.perf.ev.toFixed(3)}</td><td>{f.perf.maxDD.toFixed(2)}</td></>}
               </tr>)}</tbody></table>
             <p className="mt-2 text-xs text-muted-foreground">Each fold picks a threshold on one block of the training ticks and tests it on the next, later block. None of these blocks overlap the final test (ticks {res.split + 1}–{res.N}). * = fewer than {MIN_RELIABLE_TRADES} trades, too few to judge.</p>
           </Panel>
