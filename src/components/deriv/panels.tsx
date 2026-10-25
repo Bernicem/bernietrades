@@ -4,7 +4,7 @@ import {
   binomZ, buildSignal, chiSquareUniform, CONTRACTS, contractHits, detectRegime, digitCounts, expectedValue, mean, needsBarrier,
   shannonEntropy, streaks, theoreticalP, twoSidedP, wilson, klFromUniform, type ContractType,
 } from "@/lib/stats";
-import { runBacktest } from "@/lib/backtest";
+import { MIN_RELIABLE_TRADES, MIN_TRAIN_TRADES, runBacktest } from "@/lib/backtest";
 import { fetchHistory, type SymbolInfo, type Tick } from "@/lib/deriv";
 import { Panel, Seg, Stat, StrengthBadge, pct } from "./ui";
 import { cn } from "@/lib/utils";
@@ -386,33 +386,55 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
           <label className="flex items-center justify-between">Signal lookback (ticks)<input type="number" className={input} value={lookback} min={20} onChange={(e) => setLookback(Math.max(20, +e.target.value))} /></label>
           <label className="flex items-center justify-between">Duration (ticks)<input type="number" className={input} value={duration} min={1} max={10} onChange={(e) => setDuration(Math.min(10, Math.max(1, +e.target.value)))} /></label>
           <label className="flex items-center justify-between">Total payout per 1 stake<input type="number" step="0.01" className={input} value={payout} onChange={(e) => setPayout(+e.target.value)} /></label>
-          <p className="text-xs text-muted-foreground">Entry rule: enter when the contract's past-window z ≥ threshold. Threshold chosen on the first 60% (train) and reported on the last 40% (test). Signals use only past ticks. Data: {ticks.length} ticks.</p>
+          <p className="text-xs text-muted-foreground">Entry rule: enter when the contract's past-window z ≥ threshold. Threshold chosen on the first 60% (train) and reported once on the last 40% (test); walk-forward runs inside the train part. Signals use only past ticks. Data: {ticks.length} ticks.</p>
           <button onClick={run} disabled={ticks.length < 300} className="w-full rounded bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40">Run backtest</button>
         </div>
       </Panel>
       {res ? (
         <>
           <Panel title="Out-of-sample (test) results" className="lg:col-span-2">
+            {res.test === null ? (
+              <p className="text-sm">Insufficient data: no threshold produced at least {MIN_TRAIN_TRADES} trades in the training period, so no strategy could be selected or tested. Load more ticks or lower the lookback.</p>
+            ) : (<>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <Stat label="Trades" value={res.test.trades} sub={`z ≥ ${res.bestZ}`} />
-              <Stat label="Win rate" value={pct(res.test.winRate)} sub={`CI ${pct(res.test.ci[0])}–${pct(res.test.ci[1])}`} />
-              <Stat label="Baseline p" value={pct(res.base)} />
-              <Stat label="EV / trade" value={res.test.ev.toFixed(4)} tone={res.test.ev > 0 ? "up" : "down"} sub={`baseline ${res.baselineEv.toFixed(4)}`} />
-              <Stat label="Profit factor" value={Number.isFinite(res.test.profitFactor) ? res.test.profitFactor.toFixed(2) : "∞"} />
-              <Stat label="Max drawdown" value={res.test.maxDD.toFixed(2)} />
+              <Stat label="Trades" value={res.test.trades === 0 ? "No eligible trades" : res.test.trades} sub={`z ≥ ${res.bestZ}`} />
+              <Stat label="Win rate" value={res.test.trades ? pct(res.test.winRate) : "—"} sub={res.test.trades ? `CI ${pct(res.test.ci[0])}–${pct(res.test.ci[1])}` : undefined} />
+              <Stat label="Baseline p" value={pct(res.base)} sub={`break-even ${pct(res.breakEven)}`} />
+              <Stat label="EV / trade" value={res.test.trades ? res.test.ev.toFixed(4) : "—"} tone={res.test.ev > 0 ? "up" : "down"} sub={`baseline ${res.baselineEv.toFixed(4)}`} />
+              <Stat label="Profit factor" value={!res.test.trades ? "—" : Number.isFinite(res.test.profitFactor) ? res.test.profitFactor.toFixed(2) : "∞"} />
+              <Stat label="Max drawdown" value={res.test.maxDD.toFixed(2)} sub="in stake units" />
               <Stat label="Longest loss streak" value={res.test.longestLoss} />
               <Stat label="Sharpe / trade" value={res.test.sharpe.toFixed(3)} />
             </div>
             <div className="mt-4 h-48"><ResponsiveContainer><LineChart data={res.test.equity.map((v, i) => ({ i, v }))}><CartesianGrid stroke="var(--border)" vertical={false} /><XAxis dataKey="i" {...axis} /><YAxis {...axis} /><Tooltip {...tip} /><ReferenceLine y={0} stroke="var(--muted-foreground)" /><Line dataKey="v" stroke={res.test.ev > 0 ? "var(--success)" : "var(--destructive)"} dot={false} isAnimationActive={false} name="Equity" /></LineChart></ResponsiveContainer></div>
-            <p className="mt-2 text-sm">{res.test.trades < 30 ? "Too few test trades to draw conclusions." : res.test.ci[0] > (1 / payout) && res.test.ev > 0 ? "Positive out-of-sample EV with win-rate CI above break-even — still treat with caution." : `No demonstrated edge: break-even win rate is ${pct(1 / payout)}.`}</p>
+            <p className="mt-2 text-sm">{res.test.trades === 0 ? "No eligible trades in the test period." : res.test.trades < MIN_RELIABLE_TRADES ? `Insufficient data: only ${res.test.trades} test trades (need at least ${MIN_RELIABLE_TRADES}).` : res.test.ev <= 0 ? `This strategy has not demonstrated a profitable edge at a total payout of ${payout}. It lost on average ${Math.abs(res.test.ev).toFixed(3)} per 1 stake; you need to win more than ${pct(res.breakEven)} of trades just to break even.` : res.test.ci[0] > res.breakEven ? "Positive out-of-sample EV with win-rate CI above break-even — still treat with caution." : `Positive EV, but the win-rate range still includes the ${pct(res.breakEven)} break-even, so it could be luck.`}</p>
+            {res.bestTrainEv !== null && res.bestTrainEv <= 0 && <p className="mt-1 text-xs text-warning">Note: even the best threshold lost money in training (EV {res.bestTrainEv.toFixed(3)}). It is shown only for reference — no threshold looked profitable.</p>}
+            <p className="mt-1 text-xs text-muted-foreground">Trained on ticks 1–{res.split}, tested on ticks {res.split + 1}–{res.N}. Consecutive trades use overlapping lookback windows, so they are not fully independent and the range shown may be too narrow.</p>
+            </>)}
           </Panel>
           <Panel title="Train results (threshold selection)">
             <table className="num w-full text-sm"><thead className="text-xs text-muted-foreground"><tr><th>z ≥</th><th>Trades</th><th>Win</th><th>EV</th></tr></thead>
-              <tbody>{res.trainResults.map((r) => <tr key={r.z} className={cn("border-t border-border text-center", r.z === res.bestZ && "text-primary")}><td className="py-1">{r.z}</td><td>{r.trades}</td><td>{pct(r.winRate)}</td><td>{r.ev.toFixed(3)}</td></tr>)}</tbody></table>
+              <tbody>{res.trainResults.map((r) => <tr key={r.z} className={cn("border-t border-border text-center", r.z === res.bestZ && "text-primary")}>{r.trades === 0 ? <><td className="py-1">{r.z}</td><td colSpan={3} className="text-muted-foreground">No eligible trades</td></> : <><td className="py-1">{r.z}</td><td>{r.trades}{r.trades < MIN_TRAIN_TRADES && <span className="text-muted-foreground">*</span>}</td><td>{pct(r.winRate)}</td><td>{r.ev.toFixed(3)}</td></>}</tr>)}</tbody></table>
+            <p className="mt-2 text-xs text-muted-foreground">Highlighted = chosen. Only thresholds with ≥ {MIN_TRAIN_TRADES} trades can be chosen{res.trainResults.some((r) => r.trades > 0 && r.trades < MIN_TRAIN_TRADES) ? " (* = too few)" : ""}.</p>
           </Panel>
-          <Panel title="Walk-forward validation" className="lg:col-span-2">
-            <table className="num w-full text-sm"><thead className="text-xs text-muted-foreground"><tr><th>Fold</th><th>z chosen</th><th>Trades</th><th>Win rate</th><th>EV</th><th>Max DD</th></tr></thead>
-              <tbody>{res.folds.map((f) => <tr key={f.fold} className="border-t border-border text-center"><td className="py-1">{f.fold}</td><td>{f.z}</td><td>{f.perf.trades}</td><td>{pct(f.perf.winRate)}</td><td className={f.perf.ev > 0 ? "text-success" : "text-destructive"}>{f.perf.ev.toFixed(3)}</td><td>{f.perf.maxDD.toFixed(2)}</td></tr>)}</tbody></table>
+          <Panel title="Walk-forward validation (inside training period)" className="lg:col-span-2">
+            <table className="num w-full text-sm"><thead className="text-xs text-muted-foreground"><tr><th>Fold</th><th>Ticks tested</th><th>z chosen</th><th>Trades</th><th>Win rate</th><th>EV</th><th>Max DD</th></tr></thead>
+              <tbody>{res.folds.map((f) => <tr key={f.fold} className="border-t border-border text-center"><td className="py-1">{f.fold}</td><td>{f.from + 1}–{f.to}</td>
+                {f.perf === null ? <td colSpan={5} className="text-muted-foreground">Insufficient data — no threshold had enough trades to choose</td>
+                  : f.perf.trades === 0 ? <><td>{f.z}</td><td colSpan={4} className="text-muted-foreground">No eligible trades</td></>
+                  : <><td>{f.z}</td><td>{f.perf!.trades}{f.perf!.trades < MIN_RELIABLE_TRADES && <span className="text-muted-foreground">*</span>}</td><td>{pct(f.perf.winRate)}</td><td className={f.perf.ev > 0 ? "text-success" : "text-destructive"}>{f.perf.ev.toFixed(3)}</td><td>{f.perf.maxDD.toFixed(2)}</td></>}
+              </tr>)}</tbody></table>
+            <p className="mt-2 text-xs text-muted-foreground">Each fold picks a threshold on one block of the training ticks and tests it on the next, later block. None of these blocks overlap the final test (ticks {res.split + 1}–{res.N}). * = fewer than {MIN_RELIABLE_TRADES} trades, too few to judge.</p>
+          </Panel>
+          <Panel title="What these terms mean" className="lg:col-span-3">
+            <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+              <div><dt className="font-semibold">Training data</dt><dd className="text-muted-foreground">The older {Math.round(0.6 * 100)}% of ticks. The app tries each threshold here and picks the one that did best. Results here are flattering because the choice was made on this data.</dd></div>
+              <div><dt className="font-semibold">Out-of-sample testing</dt><dd className="text-muted-foreground">The newest 40% of ticks, never used to choose anything. The chosen rule is run here once — this is the honest result.</dd></div>
+              <div><dt className="font-semibold">Walk-forward validation</dt><dd className="text-muted-foreground">Repeats "choose on the past, test on the next block" several times within the training data, to see whether a choice keeps working as time moves forward.</dd></div>
+              <div><dt className="font-semibold">Expected value (EV)</dt><dd className="text-muted-foreground">Average profit or loss per trade for a 1 stake. Negative EV means you lose money on average over many trades.</dd></div>
+              <div><dt className="font-semibold">Break-even probability</dt><dd className="text-muted-foreground">The win rate needed to not lose money: stake ÷ total payout. At a payout of {payout} it is {pct(res.breakEven)}. A 50% coin flip is below this, so it loses slowly.</dd></div>
+              <div><dt className="font-semibold">Maximum drawdown</dt><dd className="text-muted-foreground">The biggest drop from a previous high in your running balance, in stakes. A drawdown of 16 means at one point you were 16 stakes below your best.</dd></div>
+            </dl>
           </Panel>
         </>
       ) : <Panel className="lg:col-span-2"><p className="text-sm text-muted-foreground">Configure and run a backtest on the loaded tick history (increase the buffer for more data).</p></Panel>}
