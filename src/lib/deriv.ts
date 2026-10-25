@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { lastDigit } from "./stats";
 
-const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
+const WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public";
 
 export interface SymbolInfo { symbol: string; display_name: string; submarket_display_name: string; pip: number }
 export interface Tick { epoch: number; quote: number; digit: number }
@@ -82,11 +82,11 @@ export function useSymbols() {
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    getClient().send({ active_symbols: "brief", product_type: "basic" })
+    getClient().send({ active_symbols: "brief" })
       .then((m) => setSymbols(
         (m.active_symbols as any[])
-          .filter((s) => s.market === "synthetic_index" && s.exchange_is_open)
-          .map((s) => ({ symbol: s.symbol, display_name: s.display_name, submarket_display_name: s.submarket_display_name, pip: s.pip }))
+          .filter((s) => s.market === "synthetic_index" && s.exchange_is_open && !s.is_trading_suspended)
+          .map((s) => ({ symbol: s.underlying_symbol ?? s.symbol, display_name: s.underlying_symbol_name ?? s.display_name, submarket_display_name: s.submarket ?? "", pip: s.pip_size ?? s.pip }))
           .sort((a, b) => a.display_name.localeCompare(b.display_name)),
       ))
       .catch((e) => setError(e?.message ?? "Failed to load markets"));
