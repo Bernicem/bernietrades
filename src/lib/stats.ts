@@ -173,7 +173,7 @@ export function classify(z: number, n: number, minN = 100): Strength {
 
 export interface Signal {
   contract: ContractType;
-  barrier?: number;
+  barrier?: number | undefined;
   window: number;
   n: number;
   observed: number;

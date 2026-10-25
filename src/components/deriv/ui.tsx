@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { Strength } from "@/lib/stats";
 
-export function Panel({ title, children, className, right }: { title?: string; children: ReactNode; className?: string; right?: ReactNode }) {
+export function Panel({ title, children, className, right }: { title?: string | undefined; children: ReactNode; className?: string | undefined; right?: ReactNode }) {
   return (
     <section className={cn("rounded-md border border-border bg-card p-4", className)}>
       {title && (
@@ -16,7 +16,7 @@ export function Panel({ title, children, className, right }: { title?: string; c
   );
 }
 
-export function Stat({ label, value, sub, tone }: { label: string; value: ReactNode; sub?: ReactNode; tone?: "up" | "down" | "warn" }) {
+export function Stat({ label, value, sub, tone }: { label: string; value: ReactNode; sub?: ReactNode | undefined; tone?: "up" | "down" | "warn" | undefined }) {
   return (
     <div className="min-w-0">
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</div>
@@ -35,7 +35,7 @@ export function StrengthBadge({ s }: { s: Strength }) {
   return <span className={cn("inline-block rounded border px-2 py-0.5 text-[11px] font-medium", tone)}>{s}</span>;
 }
 
-export function Seg<T extends string | number>({ value, options, onChange, fmt }: { value: T; options: T[]; onChange: (v: T) => void; fmt?: (v: T) => string }) {
+export function Seg<T extends string | number>({ value, options, onChange, fmt }: { value: T; options: T[]; onChange: (v: T) => void; fmt?: ((v: T) => string) | undefined }) {
   return (
     <div className="inline-flex flex-wrap gap-1 rounded-md border border-border p-0.5">
       {options.map((o) => (
