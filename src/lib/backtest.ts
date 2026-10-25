@@ -59,29 +59,42 @@ export function perf(trades: Trade[]): Perf {
   return { trades: n, wins, losses: n - wins, winRate: n ? wins / n : 0, ci: wilson(wins, n), ev: avg, profitFactor: gl ? gp / gl : gp ? Infinity : 0, maxDD, longestLoss: longest, avg, sharpe: sd ? avg / sd : 0, equity };
 }
 
+export const MIN_TRAIN_TRADES = 10;
+export const MIN_FOLD_TRAIN_TRADES = 5;
+export const MIN_RELIABLE_TRADES = 30;
+
+// Pick the threshold with the best EV among thresholds that produced enough trades.
+// Thresholds with too few (or zero) trades are never eligible, so "0 trades → EV 0" can't win.
+// Returns null when no threshold qualifies — we never silently fall back to a default.
+export function selectThreshold(results: { z: number; trades: number; ev: number }[], minTrades: number): number | null {
+  let best: number | null = null, bestEv = -Infinity;
+  for (const r of results) if (r.trades >= minTrades && r.ev > bestEv) { bestEv = r.ev; best = r.z; }
+  return best;
+}
+
+export interface Fold { fold: number; z: number | null; trainEv: number | null; from: number; to: number; perf: Perf | null }
+
 export function runBacktest(cfg: BacktestConfig, prices: number[], digits: number[]) {
   const N = prices.length;
   const split = Math.floor(N * cfg.trainFrac);
-  // optimise threshold on training data only
-  let bestZ = cfg.zCandidates[0], bestEv = -Infinity;
-  const trainResults = cfg.zCandidates.map((z) => {
-    const p = perf(simulate(cfg, prices, digits, 0, split, z));
-    if (p.trades >= 10 && p.ev > bestEv) { bestEv = p.ev; bestZ = z; }
-    return { z, ...p };
-  });
-  const test = perf(simulate(cfg, prices, digits, split, N, bestZ));
-  // walk-forward: 4 folds, each optimised on the preceding segment
-  const folds: { fold: number; z: number; perf: Perf }[] = [];
-  const seg = Math.floor(N / 5);
+  // 1) Final test: threshold chosen on [0, split) only, reported on [split, N).
+  const trainResults = cfg.zCandidates.map((z) => ({ z, ...perf(simulate(cfg, prices, digits, 0, split, z)) }));
+  const bestZ = selectThreshold(trainResults, MIN_TRAIN_TRADES);
+  const bestTrainEv = bestZ === null ? null : trainResults.find((r) => r.z === bestZ)!.ev;
+  const test = bestZ === null ? null : perf(simulate(cfg, prices, digits, split, N, bestZ));
+  // 2) Walk-forward runs INSIDE the training period only, so it never reuses the final test data.
+  //    Training period is cut into 5 chronological blocks; fold k picks a threshold on block k
+  //    and evaluates it on block k+1 (later, non-overlapping).
+  const folds: Fold[] = [];
+  const seg = Math.floor(split / 5);
   for (let f = 1; f <= 4; f++) {
-    let fz = cfg.zCandidates[0], fe = -Infinity;
-    for (const z of cfg.zCandidates) {
-      const p = perf(simulate(cfg, prices, digits, (f - 1) * seg, f * seg, z));
-      if (p.trades >= 5 && p.ev > fe) { fe = p.ev; fz = z; }
-    }
-    folds.push({ fold: f, z: fz, perf: perf(simulate(cfg, prices, digits, f * seg, (f + 1) * seg, fz)) });
+    const tr = cfg.zCandidates.map((z) => ({ z, ...perf(simulate(cfg, prices, digits, (f - 1) * seg, f * seg, z)) }));
+    const fz = selectThreshold(tr, MIN_FOLD_TRAIN_TRADES);
+    const from = f * seg, to = f === 4 ? split : (f + 1) * seg;
+    folds.push({ fold: f, z: fz, trainEv: fz === null ? null : tr.find((r) => r.z === fz)!.ev, from, to, perf: fz === null ? null : perf(simulate(cfg, prices, digits, from, to, fz)) });
   }
   const base = theoreticalP(cfg.contract, cfg.barrier);
   const baselineEv = base * (cfg.payoutTotal - cfg.stake) - (1 - base) * cfg.stake;
-  return { split, bestZ, trainResults, test, folds, base, baselineEv };
+  const breakEven = cfg.stake / cfg.payoutTotal;
+  return { N, split, bestZ, bestTrainEv, trainResults, test, folds, base, baselineEv, breakEven };
 }
