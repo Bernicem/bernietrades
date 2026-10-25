@@ -8,3 +8,7 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+## Architecture
+- Statistics, backtesting and the Deriv connection live in `src/lib/` (stats.ts, backtest.ts, deriv.ts), separate from UI in `src/components/deriv/` — keeps calculations pure and testable.
+- Live data uses Deriv's public options WebSocket (`wss://api.derivws.com/trading/v1/options/ws/public`, no auth); the legacy `ws.derivws.com` endpoint is unreachable. Never show simulated data.
