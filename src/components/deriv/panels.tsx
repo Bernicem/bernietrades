@@ -2,11 +2,13 @@ import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
   binomZ, buildSignal, chiSquareUniform, CONTRACTS, contractHits, detectRegime, digitCounts, expectedValue, mean, needsBarrier,
-  shannonEntropy, streaks, theoreticalP, twoSidedP, wilson, klFromUniform, type ContractType,
+  shannonEntropy, streaks, theoreticalP, twoSidedP, wilson, klFromUniform, rankSignals, type ContractType,
 } from "@/lib/stats";
-import { MIN_RELIABLE_TRADES, MIN_TRAIN_TRADES, runBacktest } from "@/lib/backtest";
+import { backtestInvalidReason, MIN_RELIABLE_TRADES, MIN_TRAIN_TRADES, runBacktest } from "@/lib/backtest";
 import { fetchHistory, type SymbolInfo, type Tick } from "@/lib/deriv";
-import { Panel, Seg, Stat, StrengthBadge, pct } from "./ui";
+import { Panel, Seg, Stat, StrengthBadge, fx, pct } from "./ui";
+
+const MIN_WINDOW_N = 30; // below this, per-window verdicts are labelled insufficient
 import { cn } from "@/lib/utils";
 
 const tip = { contentStyle: { background: "var(--popover)", border: "1px solid var(--border)", fontSize: 12 }, labelStyle: { color: "var(--muted-foreground)" } };
@@ -60,9 +62,9 @@ export function DigitPanel({ ticks, window }: P) {
       <Panel title="Goodness of fit">
         <div className="grid grid-cols-2 gap-3">
           <Stat label="χ² (df 9)" value={chi.stat.toFixed(2)} />
-          <Stat label="p-value" value={chi.pValue.toFixed(4)} tone={chi.pValue < 0.01 ? "warn" : undefined} />
-          <Stat label="Most frequent" value={max.d} sub={`${max.obs} hits`} />
-          <Stat label="Least frequent" value={min.d} sub={`${min.obs} hits`} />
+          <Stat label="p-value" value={chi.adequate ? chi.pValue.toFixed(4) : "—"} tone={chi.adequate && chi.pValue < 0.01 ? "warn" : undefined} />
+          <Stat label="Most frequent" value={n ? max.d : "—"} sub={n ? `${max.obs} hits` : undefined} />
+          <Stat label="Least frequent" value={n ? min.d : "—"} sub={n ? `${min.obs} hits` : undefined} />
           <Stat label="Expected / digit" value={(n / 10).toFixed(1)} />
           <Stat label="Sample adequate" value={chi.adequate ? "Yes" : "No"} sub="needs ≥5 expected" tone={chi.adequate ? "up" : "down"} />
         </div>
@@ -123,11 +125,11 @@ export function EvenOddPanel({ ticks }: { ticks: Tick[] }) {
       <Panel title="Even / Odd by window" className="lg:col-span-2">
         <table className="num w-full text-sm">
           <thead className="text-xs text-muted-foreground"><tr><th className="text-left">Window</th><th>Even</th><th>Odd</th><th>95% CI (even)</th><th>z</th><th>p</th><th>Verdict</th></tr></thead>
-          <tbody>{rows.map((r) => (
+          <tbody>{rows.filter((r, i, a) => i === 0 || r.n > a[i - 1].n).map((r) => (
             <tr key={r.w} className="border-t border-border text-center">
               <td className="py-1.5 text-left">{r.n}</td><td>{pct(r.ep)}</td><td>{pct(1 - r.ep)}</td>
               <td>{pct(r.ci[0])}–{pct(r.ci[1])}</td><td>{r.z.toFixed(2)}</td><td>{r.p.toFixed(3)}</td>
-              <td className={cn("text-xs", r.p < 0.05 ? "text-warning" : "text-muted-foreground")}>{r.p < 0.05 ? "Unusual" : "Random range"}</td>
+              <td className={cn("text-xs", r.n >= MIN_WINDOW_N && r.p < 0.05 ? "text-warning" : "text-muted-foreground")}>{r.n < MIN_WINDOW_N ? `Insufficient (<${MIN_WINDOW_N})` : r.p < 0.05 ? "Unusual" : "Random range"}</td>
             </tr>))}
           </tbody>
         </table>
@@ -142,7 +144,7 @@ export function EvenOddPanel({ ticks }: { ticks: Tick[] }) {
       </Panel>
       <Panel title="Streaks & sequence">
         <div className="grid grid-cols-2 gap-3">
-          <Stat label="Current streak" value={`${st.current} ${st.currentVal === "E" ? "Even" : "Odd"}`} />
+          <Stat label="Current streak" value={st.currentVal === undefined ? "—" : `${st.current} ${st.currentVal === "E" ? "Even" : "Odd"}`} />
           <Stat label="Longest (500)" value={`${st.longest} ${st.longestVal === "E" ? "Even" : "Odd"}`} sub={`expected ≈ ${Math.log2(Math.min(500, all.length) || 1).toFixed(1)}`} />
         </div>
         <div className="mt-4 flex flex-wrap gap-1">
@@ -162,7 +164,7 @@ export function RiseFallPanel({ ticks }: { ticks: Tick[] }) {
     const d = diffs.slice(-w); const up = d.filter((x) => x > 0); const dn = d.filter((x) => x < 0);
     const z = binomZ(up.length, up.length + dn.length, 0.5);
     const sd = Math.sqrt(mean(d.map((x) => x * x))) || 1;
-    return { w: d.length, up: up.length, dn: dn.length, avgUp: mean(up), avgDn: mean(dn), z, roc: prices.length > w ? (prices.at(-1)! / prices.at(-w - 1)! - 1) : 0, vadj: (d.reduce((a, b) => a + b, 0) / (sd * Math.sqrt(d.length || 1))) };
+    return { w: d.length, up: up.length, dn: dn.length, avgUp: mean(up), avgDn: mean(dn), z, roc: prices.length > w ? (prices.at(-1)! / prices.at(-w - 1)! - 1) : NaN, vadj: (d.reduce((a, b) => a + b, 0) / (sd * Math.sqrt(d.length || 1))) };
   };
   const rows = [20, 100, 500].map(win);
   const st = streaks(diffs.slice(-500).map((x) => (x > 0 ? "R" : x < 0 ? "F" : "=")));
@@ -179,7 +181,7 @@ export function RiseFallPanel({ ticks }: { ticks: Tick[] }) {
           <tbody>{rows.map((r, i) => (
             <tr key={i} className="border-t border-border text-center"><td className="py-1.5 text-left">{["Short", "Medium", "Long"][i]} ({r.w})</td>
               <td className="text-success">{pct(r.up / (r.w || 1))}</td><td className="text-destructive">{pct(r.dn / (r.w || 1))}</td>
-              <td>{r.avgUp.toFixed(3)}</td><td>{r.avgDn.toFixed(3)}</td><td>{(r.roc * 100).toFixed(3)}%</td><td>{r.vadj.toFixed(2)}</td><td>{r.z.toFixed(2)}</td></tr>))}
+              <td>{r.up ? r.avgUp.toFixed(3) : "—"}</td><td>{r.dn ? r.avgDn.toFixed(3) : "—"}</td><td>{Number.isFinite(r.roc) ? `${(r.roc * 100).toFixed(3)}%` : "—"}</td><td>{r.vadj.toFixed(2)}</td><td>{r.up + r.dn >= MIN_WINDOW_N ? r.z.toFixed(2) : "—"}</td></tr>))}
           </tbody>
         </table>
       </Panel>
@@ -187,7 +189,7 @@ export function RiseFallPanel({ ticks }: { ticks: Tick[] }) {
         <div className="grid grid-cols-2 gap-3">
           <Stat label="Current streak" value={`${st.current} ${st.currentVal === "R" ? "Rise" : st.currentVal === "F" ? "Fall" : "Flat"}`} />
           <Stat label="Longest (500)" value={st.longest} />
-          <Stat label="MA10 vs MA50" value={(ma(10) - ma(50)).toFixed(3)} tone={ma(10) > ma(50) ? "up" : "down"} />
+          <Stat label="MA10 vs MA50" value={prices.length >= 50 ? (ma(10) - ma(50)).toFixed(3) : "—"} tone={prices.length >= 50 ? (ma(10) > ma(50) ? "up" : "down") : undefined} />
           <Stat label="Max move (100)" value={maxMove.toFixed(3)} />
           <Stat label="Avg |move|" value={mean(diffs.slice(-100).map(Math.abs)).toFixed(3)} />
           <Stat label="Consistency" value={pct(Math.max(rows[0].up, rows[0].dn) / (rows[0].w || 1))} sub="short-term" />
@@ -252,14 +254,14 @@ export function OverUnderPanel({ ticks, window }: P) {
       <Panel title="Threshold" right={<Seg value={b} options={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]} onChange={setB} />} className="lg:col-span-3">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
           <Stat label={`Over ${b} observed`} value={pct(n ? over / n : 0)} sub={`theory ${pct(pO, 0)}`} />
-          <Stat label="Over z" value={zO.toFixed(2)} tone={Math.abs(zO) > 2 ? "warn" : undefined} sub={`CI ${pct(wilson(over, n)[0], 0)}–${pct(wilson(over, n)[1], 0)}`} />
+          <Stat label="Over z" value={pO > 0 ? zO.toFixed(2) : "n/a"} tone={Math.abs(zO) > 2 ? "warn" : undefined} sub={`CI ${pct(wilson(over, n)[0], 0)}–${pct(wilson(over, n)[1], 0)}`} />
           <Stat label={`Under ${b} observed`} value={pct(n ? under / n : 0)} sub={`theory ${pct(pU, 0)}`} />
-          <Stat label="Under z" value={zU.toFixed(2)} tone={Math.abs(zU) > 2 ? "warn" : undefined} sub={`CI ${pct(wilson(under, n)[0], 0)}–${pct(wilson(under, n)[1], 0)}`} />
+          <Stat label="Under z" value={pU > 0 ? zU.toFixed(2) : "n/a"} tone={Math.abs(zU) > 2 ? "warn" : undefined} sub={`CI ${pct(wilson(under, n)[0], 0)}–${pct(wilson(under, n)[1], 0)}`} />
           <Stat label={`Equal to ${b}`} value={pct(n ? eq / n : 0)} sub="loses both" />
           <Stat label="Current streak" value={`${st.current} ${st.currentVal ?? ""}`} />
           <Stat label="Qualifying digits" value={`${9 - b} / ${b}`} sub="over / under" />
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">Strict inequalities: Over {b} wins on digits {b + 1}–9 ({9 - b} digits, {pct(pO, 0)}); Under {b} wins on 0–{b - 1} ({b} digits, {pct(pU, 0)}). Digit {b} itself loses both.</p>
+        <p className="mt-3 text-xs text-muted-foreground">Strict inequalities: Over {b} wins on digits {b + 1}–9 ({9 - b} digits, {pct(pO, 0)}); Under {b} wins on 0–{b - 1} ({b} digits, {pct(pU, 0)}). Digit {b} itself loses both.{(pO === 0 || pU === 0) && ` ${pO === 0 ? `Over ${b}` : `Under ${b}`} can never win, so no z-score is computed for it.`}</p>
       </Panel>
       <Panel title="Rolling probability (50-tick)" className="lg:col-span-3">
         <div className="h-48"><ResponsiveContainer><LineChart data={rolling}><CartesianGrid stroke="var(--border)" vertical={false} /><XAxis dataKey="i" hide /><YAxis domain={[0, 1]} {...axis} tickFormatter={(v) => pct(v, 0)} /><Tooltip {...tip} formatter={(v: number) => pct(v)} />
@@ -289,12 +291,12 @@ export function IntelPanel({ ticks, window }: P) {
     const adj = d.slice(1).filter((x, i) => Math.abs(x - d[i]) === 1).length;
     const p = prices.slice(-window - 1); const mv = p.slice(1).map((x, i) => Math.sign(x - p[i]));
     const sameDir = mv.slice(1).filter((x, i) => x !== 0 && x === mv[i]).length;
-    const mk = (name: string, k: number, m: number, base: number) => { const z = binomZ(k, m, base); return { name, k, m, obs: m ? k / m : 0, base, z, p: twoSidedP(z) }; };
+    const mk = (name: string, k: number, m: number, base: number) => { const z = binomZ(k, m, base); return { name, k, m, obs: m ? k / m : NaN, base, z, p: m >= MIN_WINDOW_N ? twoSidedP(z) : NaN }; };
     return [mk("Repeated digit (d[t]=d[t-1])", rep, n, 0.1), mk("Even/odd alternation", alt, n, 0.5), mk("Adjacent digits (±1)", adj, n, 0.18), mk("Repeated direction", sameDir, Math.max(0, mv.length - 1), 0.5)];
   }, [ticks.length, window]); // eslint-disable-line
   const anomalies: string[] = [];
   const counts = digitCounts(digits.slice(-window)); const n = Math.min(window, digits.length);
-  counts.forEach((c, d) => { const z = binomZ(c, n, 0.1); if (Math.abs(z) > 2.58) anomalies.push(`Digit ${d} appeared ${z > 0 ? "more" : "less"} often than expected over the last ${n} ticks (z=${z.toFixed(2)}). Statistically unusual at 1%, but persistence is not confirmed.`); });
+  if (n >= 100) counts.forEach((c, d) => { const z = binomZ(c, n, 0.1); if (Math.abs(z) > 2.58) anomalies.push(`Digit ${d} appeared ${z > 0 ? "more" : "less"} often than expected over the last ${n} ticks (z=${z.toFixed(2)}). Statistically unusual at 1%, but persistence is not confirmed.`); });
   if (reg.cp.score > 3.5) anomalies.push(`Possible change in tick-size behaviour near tick ${reg.cp.index} of the window (score ${reg.cp.score.toFixed(1)}).`);
   if (reg.vol.ratio > 1.5) anomalies.push(`Recent volatility is ${reg.vol.ratio.toFixed(2)}× the full-history level.`);
   return (
@@ -302,12 +304,12 @@ export function IntelPanel({ ticks, window }: P) {
       <Panel title="Market regime" className="lg:col-span-3">
         <div className="flex flex-wrap gap-2">{reg.tags.map((t) => <span key={t} className="rounded border border-primary/40 bg-primary/10 px-2 py-1 text-sm text-primary">{t}</span>)}</div>
         <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          <Stat label="Volatility pct" value={pct(reg.vol.pct, 0)} sub="vs rolling history" />
+          <Stat label="Volatility pct" value={pct(reg.vol.pct, 0)} sub={Number.isFinite(reg.vol.pct) ? "vs rolling history" : "needs more ticks"} />
           <Stat label="Recent σ / hist σ" value={reg.vol.ratio.toFixed(2)} tone={reg.vol.ratio > 1.2 ? "warn" : undefined} sub={reg.vol.ratio > 1.1 ? "expanding" : reg.vol.ratio < 0.9 ? "contracting" : "stable"} />
           <Stat label="Avg tick range" value={reg.vol.avgAbs.toFixed(4)} />
           <Stat label="Direction z" value={reg.zDir.toFixed(2)} />
-          <Stat label="Digit χ² p" value={reg.chi.pValue.toFixed(3)} />
-          <Stat label="Change-point" value={reg.cp.score.toFixed(2)} sub=">3.5 flags" />
+          <Stat label="Digit χ² p" value={reg.chi.adequate ? reg.chi.pValue.toFixed(3) : "—"} sub={reg.chi.adequate ? undefined : "sample too small"} />
+          <Stat label="Change-point" value={reg.cp.index < 0 ? "—" : reg.cp.score.toFixed(2)} sub={reg.cp.index < 0 ? "needs ≥40 ticks" : ">3.5 flags"} />
         </div>
       </Panel>
       <Panel title="Shannon entropy (digits)">
@@ -327,35 +329,39 @@ export function IntelPanel({ ticks, window }: P) {
         <table className="num w-full text-sm">
           <thead className="text-xs text-muted-foreground"><tr><th className="text-left">Pattern</th><th>Count</th><th>Observed</th><th>Baseline</th><th>z</th><th>p</th><th>OOS value</th></tr></thead>
           <tbody>{pats.map((p) => (
-            <tr key={p.name} className="border-t border-border text-center"><td className="py-1.5 text-left font-sans">{p.name}</td><td>{p.k}/{p.m}</td><td>{pct(p.obs)}</td><td>{pct(p.base)}</td><td>{p.z.toFixed(2)}</td><td className={p.p < 0.05 ? "text-warning" : ""}>{p.p.toFixed(3)}</td><td className="text-xs text-muted-foreground">Not demonstrated</td></tr>))}
+            <tr key={p.name} className="border-t border-border text-center"><td className="py-1.5 text-left font-sans">{p.name}</td><td>{p.k}/{p.m}</td><td>{pct(p.obs)}</td><td>{pct(p.base)}</td><td>{Number.isFinite(p.p) ? p.z.toFixed(2) : "—"}</td><td className={p.p < 0.05 ? "text-warning" : ""}>{fx(p.p, 3)}</td><td className="text-xs text-muted-foreground">Not demonstrated</td></tr>))}
           </tbody>
         </table>
       </Panel>
       <Panel title="Anomalies">
-        {anomalies.length ? <ul className="space-y-2 text-sm">{anomalies.map((a, i) => <li key={i} className="border-l-2 border-warning pl-2">{a}</li>)}</ul> : <p className="text-sm text-muted-foreground">No anomalies beyond the 1% threshold in this window.</p>}
+        {anomalies.length ? <ul className="space-y-2 text-sm">{anomalies.map((a, i) => <li key={i} className="border-l-2 border-warning pl-2">{a}</li>)}</ul> : <p className="text-sm text-muted-foreground">{n < 100 ? `Insufficient data: digit anomalies need at least 100 ticks in the window (have ${n}).` : "No anomalies beyond the 1% threshold in this window."}</p>}
       </Panel>
     </div>
   );
 }
 
 // ---------------- Signals ----------------
-export function SignalsPanel({ ticks, window, market }: P & { market: string }) {
+export function SignalsPanel({ ticks, window, market, live, asOf }: P & { market: string; live: boolean; asOf: string | null }) {
   const prices = ticks.map((t) => t.quote), digits = ticks.map((t) => t.digit);
   const regime = detectRegime(prices, digits, window).tags.join(", ");
   const sigs = useMemo(() => {
     const list = CONTRACTS.flatMap((c) => (needsBarrier(c) ? (c === "OVER" ? [1, 2, 3, 4, 5, 6, 7, 8] : c === "UNDER" ? [1, 2, 3, 4, 5, 6, 7, 8] : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).map((b) => buildSignal(c, prices, digits, window, b)) : [buildSignal(c, prices, digits, window)]));
-    return list.sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
+    return rankSignals(list);
   }, [ticks.length, window]); // eslint-disable-line
-  const ts = new Date().toLocaleTimeString();
+  const ts = asOf ? `data to ${asOf}` : "no timestamp"; // time of the last tick, not "now"
+  const eligible = sigs.filter((s) => s.strength !== "Insufficient Data").length;
   return (
     <Panel title={`Signal center · ${market} · window ${window}`} right={<span className="text-xs text-muted-foreground">Regime: {regime}</span>}>
-      <p className="mb-3 text-xs text-muted-foreground">Ranked by |z|. With {sigs.length} simultaneous tests, ~{Math.round(sigs.length * 0.05)} "Weak" deviations are expected by chance. Estimates are shrunk toward baseline. Trading-edge: <b className="text-foreground">not demonstrated</b> unless the Backtest shows positive out-of-sample EV.</p>
+      {!live && <p className="mb-3 rounded border border-warning/60 bg-warning/10 p-2 text-sm text-warning">Not live: these results use data up to {asOf ?? "an unknown time"} and must not be treated as current signals.</p>}
+      {eligible === 0 && <p className="mb-3 text-sm">Insufficient data: every contract needs at least 100 ticks in the window (current window: {window}, loaded: {ticks.length}). Rows below are shown for reference only.</p>}
+      {eligible > 0 && !sigs.some((s) => s.strength !== "Insufficient Data" && s.strength !== "No Meaningful Deviation") && <p className="mb-3 text-sm">No eligible signals: enough data, but no contract deviates meaningfully from its baseline.</p>}
+      <p className="mb-3 text-xs text-muted-foreground">Ranked by |z| (contracts with too few samples listed last). With {sigs.length} simultaneous tests, ~{Math.round(sigs.length * 0.05)} "Weak" deviations are expected by chance. Estimates are shrunk toward baseline. Trading-edge: <b className="text-foreground">not demonstrated</b> unless the Backtest shows positive out-of-sample EV.</p>
       <div className="overflow-x-auto">
         <table className="num w-full min-w-[900px] text-sm">
           <thead className="text-xs text-muted-foreground"><tr><th className="text-left">Contract</th><th>n</th><th>Observed</th><th>Estimated</th><th>Baseline</th><th>95% CI</th><th>z</th><th>p</th><th className="text-left">Strength</th><th className="text-left">Explanation</th></tr></thead>
           <tbody>{sigs.slice(0, 20).map((s) => (
             <tr key={s.contract + s.barrier} className="border-t border-border text-center align-top">
-              <td className="py-2 text-left font-semibold">{s.contract}{s.barrier !== undefined ? ` ${s.barrier}` : ""}</td><td>{s.n}</td><td>{pct(s.observed)}</td><td>{pct(s.estimated)}</td><td>{pct(s.baseline)}</td>
+              <td className="py-2 text-left font-semibold">{s.contract}{s.barrier !== undefined ? ` ${s.barrier}` : ""}</td><td>{s.n}</td><td>{s.n ? pct(s.observed) : "—"}</td><td>{pct(s.estimated)}</td><td>{pct(s.baseline)}</td>
               <td>{pct(s.ci[0])}–{pct(s.ci[1])}</td><td>{s.z.toFixed(2)}</td><td>{s.pValue.toFixed(3)}</td><td className="text-left"><StrengthBadge s={s.strength} /></td>
               <td className="max-w-sm text-left font-sans text-xs text-muted-foreground">{s.explanation} <span className="opacity-70">· {ts} · review after {Math.round(window / 4)} ticks</span></td>
             </tr>))}
@@ -373,9 +379,11 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
   const [lookback, setLookback] = useState(100);
   const [duration, setDuration] = useState(1);
   const [payout, setPayout] = useState(1.95);
-  const [res, setRes] = useState<ReturnType<typeof runBacktest> | null>(null);
+  const [res, setRes] = useState<(ReturnType<typeof runBacktest> & { ranAt: string }) | null>(null);
   const prices = ticks.map((t) => t.quote), digits = ticks.map((t) => t.digit);
-  const run = () => setRes(runBacktest({ contract, barrier, lookback, duration, zCandidates: [1, 1.5, 2, 2.5, 3], trainFrac: 0.6, stake: 1, payoutTotal: payout }, prices, digits));
+  const cfg = { contract, barrier, lookback, duration, zCandidates: [1, 1.5, 2, 2.5, 3], trainFrac: 0.6, stake: 1, payoutTotal: payout };
+  const invalid = backtestInvalidReason(cfg, prices.length);
+  const run = () => { if (!invalid) setRes({ ...runBacktest(cfg, prices, digits), ranAt: new Date().toLocaleTimeString() }); };
   const input = "num w-24 rounded border border-input bg-background px-2 py-1 text-sm";
   return (
     <div className="grid gap-4 lg:grid-cols-3">
@@ -383,16 +391,18 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
         <div className="space-y-3 text-sm">
           <div><div className="mb-1 text-xs text-muted-foreground">Contract</div><Seg value={contract} options={CONTRACTS} onChange={setContract} /></div>
           {needsBarrier(contract) && <div><div className="mb-1 text-xs text-muted-foreground">Digit / threshold</div><Seg value={barrier} options={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]} onChange={setBarrier} /></div>}
-          <label className="flex items-center justify-between">Signal lookback (ticks)<input type="number" className={input} value={lookback} min={20} onChange={(e) => setLookback(Math.max(20, +e.target.value))} /></label>
-          <label className="flex items-center justify-between">Duration (ticks)<input type="number" className={input} value={duration} min={1} max={10} onChange={(e) => setDuration(Math.min(10, Math.max(1, +e.target.value)))} /></label>
+          <label className="flex items-center justify-between">Signal lookback (ticks)<input type="number" className={input} value={lookback} min={20} onChange={(e) => setLookback(Math.floor(+e.target.value) || 0)} /></label>
+          <label className="flex items-center justify-between">Duration (ticks)<input type="number" className={input} value={duration} min={1} max={10} onChange={(e) => setDuration(Math.min(10, Math.floor(+e.target.value) || 0))} /></label>
           <label className="flex items-center justify-between">Total payout per 1 stake<input type="number" step="0.01" className={input} value={payout} onChange={(e) => setPayout(+e.target.value)} /></label>
           <p className="text-xs text-muted-foreground">Entry rule: enter when the contract's past-window z ≥ threshold. Threshold chosen on the first 60% (train) and reported once on the last 40% (test); walk-forward runs inside the train part. Signals use only past ticks. Data: {ticks.length} ticks.</p>
-          <button onClick={run} disabled={ticks.length < 300} className="w-full rounded bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40">Run backtest</button>
+          {invalid && <p className="text-xs text-warning">{invalid}</p>}
+          <button onClick={run} disabled={!!invalid} className="w-full rounded bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40">Run backtest</button>
         </div>
       </Panel>
       {res ? (
         <>
           <Panel title="Out-of-sample (test) results" className="lg:col-span-2">
+            <p className="mb-2 text-xs text-muted-foreground">Run at {res.ranAt} on {res.N} ticks. New ticks since then are not included — press Run again to refresh.</p>
             {res.test === null ? (
               <p className="text-sm">Insufficient data: no threshold produced at least {MIN_TRAIN_TRADES} trades in the training period, so no strategy could be selected or tested. Load more ticks or lower the lookback.</p>
             ) : (<>
@@ -400,11 +410,11 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
               <Stat label="Trades" value={res.test.trades === 0 ? "No eligible trades" : res.test.trades} sub={`z ≥ ${res.bestZ}`} />
               <Stat label="Win rate" value={res.test.trades ? pct(res.test.winRate) : "—"} sub={res.test.trades ? `CI ${pct(res.test.ci[0])}–${pct(res.test.ci[1])}` : undefined} />
               <Stat label="Baseline p" value={pct(res.base)} sub={`break-even ${pct(res.breakEven)}`} />
-              <Stat label="EV / trade" value={res.test.trades ? res.test.ev.toFixed(4) : "—"} tone={res.test.ev > 0 ? "up" : "down"} sub={`baseline ${res.baselineEv.toFixed(4)}`} />
-              <Stat label="Profit factor" value={!res.test.trades ? "—" : Number.isFinite(res.test.profitFactor) ? res.test.profitFactor.toFixed(2) : "∞"} />
-              <Stat label="Max drawdown" value={res.test.maxDD.toFixed(2)} sub="in stake units" />
-              <Stat label="Longest loss streak" value={res.test.longestLoss} />
-              <Stat label="Sharpe / trade" value={res.test.sharpe.toFixed(3)} />
+              <Stat label="EV / trade" value={fx(res.test.ev, 4)} tone={!res.test.trades ? undefined : res.test.ev > 0 ? "up" : "down"} sub={`baseline ${res.baselineEv.toFixed(4)}`} />
+              <Stat label="Profit factor" value={res.test.profitFactor === Infinity ? "∞" : fx(res.test.profitFactor)} sub={res.test.profitFactor === Infinity ? "no losing trades" : undefined} />
+              <Stat label="Max drawdown" value={res.test.trades ? res.test.maxDD.toFixed(2) : "—"} sub="in stake units" />
+              <Stat label="Longest loss streak" value={res.test.trades ? res.test.longestLoss : "—"} />
+              <Stat label="Sharpe / trade" value={fx(res.test.sharpe, 3)} sub={Number.isFinite(res.test.sharpe) ? undefined : "needs ≥2 trades with varied results"} />
             </div>
             <div className="mt-4 h-48"><ResponsiveContainer><LineChart data={res.test.equity.map((v, i) => ({ i, v }))}><CartesianGrid stroke="var(--border)" vertical={false} /><XAxis dataKey="i" {...axis} /><YAxis {...axis} /><Tooltip {...tip} /><ReferenceLine y={0} stroke="var(--muted-foreground)" /><Line dataKey="v" stroke={res.test.ev > 0 ? "var(--success)" : "var(--destructive)"} dot={false} isAnimationActive={false} name="Equity" /></LineChart></ResponsiveContainer></div>
             <p className="mt-2 text-sm">{res.test.trades === 0 ? "No eligible trades in the test period." : res.test.trades < MIN_RELIABLE_TRADES ? `Insufficient data: only ${res.test.trades} test trades (need at least ${MIN_RELIABLE_TRADES}).` : res.test.ev <= 0 ? `This strategy has not demonstrated a profitable edge at a total payout of ${payout}. It lost on average ${Math.abs(res.test.ev).toFixed(3)} per 1 stake; you need to win more than ${pct(res.breakEven)} of trades just to break even.` : res.test.ci[0] > res.breakEven ? "Positive out-of-sample EV with win-rate CI above break-even — still treat with caution." : `Positive EV, but the win-rate range still includes the ${pct(res.breakEven)} break-even, so it could be luck.`}</p>
@@ -414,7 +424,7 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
           </Panel>
           <Panel title="Train results (threshold selection)">
             <table className="num w-full text-sm"><thead className="text-xs text-muted-foreground"><tr><th>z ≥</th><th>Trades</th><th>Win</th><th>EV</th></tr></thead>
-              <tbody>{res.trainResults.map((r) => <tr key={r.z} className={cn("border-t border-border text-center", r.z === res.bestZ && "text-primary")}>{r.trades === 0 ? <><td className="py-1">{r.z}</td><td colSpan={3} className="text-muted-foreground">No eligible trades</td></> : <><td className="py-1">{r.z}</td><td>{r.trades}{r.trades < MIN_TRAIN_TRADES && <span className="text-muted-foreground">*</span>}</td><td>{pct(r.winRate)}</td><td>{r.ev.toFixed(3)}</td></>}</tr>)}</tbody></table>
+              <tbody>{res.trainResults.map((r) => <tr key={r.z} className={cn("border-t border-border text-center", r.z === res.bestZ && "text-primary")}>{r.trades === 0 ? <><td className="py-1">{r.z}</td><td colSpan={3} className="text-muted-foreground">No eligible trades</td></> : <><td className="py-1">{r.z}</td><td>{r.trades}{r.trades < MIN_TRAIN_TRADES && <span className="text-muted-foreground">*</span>}</td><td>{pct(r.winRate)}</td><td>{fx(r.ev, 3)}</td></>}</tr>)}</tbody></table>
             <p className="mt-2 text-xs text-muted-foreground">Highlighted = chosen. Only thresholds with ≥ {MIN_TRAIN_TRADES} trades can be chosen{res.trainResults.some((r) => r.trades > 0 && r.trades < MIN_TRAIN_TRADES) ? " (* = too few)" : ""}.</p>
           </Panel>
           <Panel title="Walk-forward validation (inside training period)" className="lg:col-span-2">
@@ -448,6 +458,7 @@ export function EVPanel() {
   const [payout, setPayout] = useState(19.5);
   const [isTotal, setIsTotal] = useState(true);
   const [p, setP] = useState(50);
+  const evErr = !(stake > 0) ? "Stake must be greater than 0." : !(payout > 0) ? "Payout must be greater than 0." : isTotal && payout <= stake ? "A total return at or below the stake can never profit." : !(p >= 0 && p <= 100) ? "Win probability must be between 0 and 100%." : null;
   const r = expectedValue({ stake, payout, payoutIsTotal: isTotal, pWin: p / 100 });
   const input = "num w-full rounded border border-input bg-background px-2 py-1.5 text-sm";
   return (
@@ -462,6 +473,7 @@ export function EVPanel() {
         </div>
       </Panel>
       <Panel title="Result">
+        {evErr ? <p className="text-sm text-warning">{evErr} No result is calculated until the inputs are valid.</p> : <>
         <div className="grid grid-cols-2 gap-4">
           <Stat label="Potential profit" value={r.profit.toFixed(2)} tone="up" />
           <Stat label="Potential loss" value={r.loss.toFixed(2)} tone="down" />
@@ -469,42 +481,47 @@ export function EVPanel() {
           <Stat label="Expected value" value={r.ev.toFixed(3)} tone={r.ev > 0 ? "up" : "down"} />
           <Stat label="Expected return on stake" value={pct(r.roi, 2)} />
         </div>
-        <p className="mt-4 text-xs text-muted-foreground">EV = P(win) × profit − P(loss) × stake.</p>
+        <p className="mt-4 text-xs text-muted-foreground">EV = P(win) × profit − P(loss) × stake.</p></>}
       </Panel>
     </div>
   );
 }
 
 // ---------------- Scanner ----------------
-export function ScannerPanel({ symbols, window }: { symbols: SymbolInfo[]; window: number }) {
+export function ScannerPanel({ symbols, window, live }: { symbols: SymbolInfo[]; window: number; live: boolean }) {
+  const [meta, setMeta] = useState<{ at: string; failed: number; tried: number } | null>(null);
   const [rows, setRows] = useState<{ s: SymbolInfo; best: ReturnType<typeof buildSignal>; chiP: number; volPct: number; n: number; regime: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<ContractType | "ALL">("ALL");
   const scan = async () => {
-    setBusy(true);
-    const out: typeof rows = [];
-    for (const s of symbols.slice(0, 25)) {
+    setBusy(true); setRows([]); setMeta(null);
+    const out: typeof rows = []; let failed = 0; const list = symbols.slice(0, 25);
+    for (const s of list) {
       try {
         const t = await fetchHistory(s.symbol, Math.max(window, 500), s.pip);
         const prices = t.map((x) => x.quote), digits = t.map((x) => x.digit);
         const cs = (filter === "ALL" ? CONTRACTS : [filter]).flatMap((c) => (needsBarrier(c) ? [1, 3, 5, 7].map((b) => buildSignal(c, prices, digits, window, b)) : [buildSignal(c, prices, digits, window)]));
-        const best = cs.sort((a, b) => Math.abs(b.z) - Math.abs(a.z))[0];
+        if (t.length < 50) { failed++; continue; }
+        const best = rankSignals(cs)[0];
         const reg = detectRegime(prices, digits, window);
         out.push({ s, best, chiP: reg.chi.pValue, volPct: reg.vol.pct, n: t.length, regime: reg.tags[0] });
-        setRows([...out].sort((a, b) => Math.abs(b.best.z) - Math.abs(a.best.z)));
-      } catch { /* skip unavailable */ }
+        setRows(rankSignals(out.map((r) => ({ ...r, z: r.best.z, strength: r.best.strength }))));
+      } catch { failed++; }
     }
+    setMeta({ at: new Date().toLocaleTimeString(), failed, tried: list.length });
     setBusy(false);
   };
   return (
-    <Panel title="Market scanner" right={<div className="flex items-center gap-2"><Seg value={filter} options={["ALL", ...CONTRACTS] as (ContractType | "ALL")[]} onChange={setFilter} /><button onClick={scan} disabled={busy || !symbols.length} className="rounded bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground disabled:opacity-40">{busy ? "Scanning…" : "Scan"}</button></div>}>
+    <Panel title="Market scanner" right={<div className="flex items-center gap-2"><Seg value={filter} options={["ALL", ...CONTRACTS] as (ContractType | "ALL")[]} onChange={setFilter} /><button onClick={scan} disabled={busy || !symbols.length || !live} className="rounded bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground disabled:opacity-40">{busy ? "Scanning…" : "Scan"}</button></div>}>
       <p className="mb-3 text-xs text-muted-foreground">Ranked by largest statistical deviation (|z|) with sample size and regime shown. No market has a validated edge from this ranking alone — expected value at standard payouts remains negative unless the backtest says otherwise.</p>
       <div className="overflow-x-auto"><table className="num w-full min-w-[800px] text-sm">
         <thead className="text-xs text-muted-foreground"><tr><th className="text-left">Market</th><th>n</th><th>Top deviation</th><th>Observed / base</th><th>z</th><th className="text-left">Strength</th><th>Digit χ² p</th><th>Vol pct</th><th className="text-left">Regime</th></tr></thead>
         <tbody>{rows.map((r) => (
-          <tr key={r.s.symbol} className="border-t border-border text-center"><td className="py-1.5 text-left font-sans">{r.s.display_name}</td><td>{r.n}</td><td>{r.best.contract}{r.best.barrier !== undefined ? ` ${r.best.barrier}` : ""}</td><td>{pct(r.best.observed)} / {pct(r.best.baseline)}</td><td>{r.best.z.toFixed(2)}</td><td className="text-left"><StrengthBadge s={r.best.strength} /></td><td>{r.chiP.toFixed(3)}</td><td>{pct(r.volPct, 0)}</td><td className="text-left font-sans text-xs">{r.regime}</td></tr>))}
+          <tr key={r.s.symbol} className="border-t border-border text-center"><td className="py-1.5 text-left font-sans">{r.s.display_name}</td><td>{r.n}</td><td>{r.best.contract}{r.best.barrier !== undefined ? ` ${r.best.barrier}` : ""}</td><td>{pct(r.best.observed)} / {pct(r.best.baseline)}</td><td>{r.best.z.toFixed(2)}</td><td className="text-left"><StrengthBadge s={r.best.strength} /></td><td>{r.n >= 50 ? r.chiP.toFixed(3) : "—"}</td><td>{pct(r.volPct, 0)}</td><td className="text-left font-sans text-xs">{r.regime}</td></tr>))}
         </tbody></table></div>
-      {!rows.length && <p className="text-sm text-muted-foreground">Press Scan to analyse up to 25 live markets.</p>}
+      {meta && <p className="mt-2 text-xs text-muted-foreground">Snapshot taken at {meta.at} — not updated live.{meta.failed ? ` ${meta.failed} of ${meta.tried} markets were skipped (no data or too few ticks).` : ""}</p>}
+      {!live && <p className="mt-2 text-sm text-warning">Disconnected from Deriv — scanning is unavailable until the connection returns.</p>}
+      {!rows.length && !busy && <p className="text-sm text-muted-foreground">{meta ? "No markets returned enough data to analyse." : "Press Scan to analyse up to 25 live markets."}</p>}
     </Panel>
   );
 }

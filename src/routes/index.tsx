@@ -4,7 +4,7 @@ import { Activity, RefreshCw, ShieldAlert } from "lucide-react";
 import { useSymbols, useTicks } from "@/lib/deriv";
 import { buildSignal, CONTRACTS, detectRegime, needsBarrier, rankSignals } from "@/lib/stats";
 import { feedState } from "@/lib/ticks";
-import { Panel, Seg, Stat, StrengthBadge, fx, pct } from "@/components/deriv/ui";
+import { Panel, Seg, Stat, StrengthBadge, pct } from "@/components/deriv/ui";
 import { BacktestPanel, DigitPanel, EVPanel, EvenOddPanel, IntelPanel, MatchesPanel, OverUnderPanel, RiseFallPanel, ScannerPanel, SignalsPanel } from "@/components/deriv/panels";
 import { cn } from "@/lib/utils";
 
