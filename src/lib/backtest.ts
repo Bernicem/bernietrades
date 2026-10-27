@@ -56,7 +56,9 @@ export function perf(trades: Trade[]): Perf {
   const n = trades.length;
   const avg = n ? eq / n : 0;
   const sd = n > 1 ? Math.sqrt(trades.reduce((s, t) => s + (t.pnl - avg) ** 2, 0) / (n - 1)) : 0;
-  return { trades: n, wins, losses: n - wins, winRate: n ? wins / n : 0, ci: wilson(wins, n), ev: avg, profitFactor: gl ? gp / gl : gp ? Infinity : 0, maxDD, longestLoss: longest, avg, sharpe: sd ? avg / sd : 0, equity };
+  // Undefined metrics are NaN (shown as "—"), never a fabricated 0: no trades → no win rate/EV/profit factor;
+  // fewer than 2 trades or zero spread → no Sharpe; no losses → profit factor is unbounded (Infinity).
+  return { trades: n, wins, losses: n - wins, winRate: n ? wins / n : NaN, ci: wilson(wins, n), ev: n ? avg : NaN, profitFactor: !n ? NaN : gl ? gp / gl : Infinity, maxDD, longestLoss: longest, avg: n ? avg : NaN, sharpe: n > 1 && sd > 0 ? avg / sd : NaN, equity };
 }
 
 export const MIN_TRAIN_TRADES = 10;
@@ -73,6 +75,20 @@ export function selectThreshold(results: { z: number; trades: number; ev: number
 }
 
 export interface Fold { fold: number; z: number | null; trainEv: number | null; from: number; to: number; perf: Perf | null }
+
+export const MIN_BACKTEST_TICKS = 300;
+
+// Returns a reason string when the config/data can't produce a meaningful backtest, else null.
+export function backtestInvalidReason(cfg: BacktestConfig, n: number): string | null {
+  if (n < MIN_BACKTEST_TICKS) return `Need at least ${MIN_BACKTEST_TICKS} ticks (have ${n}).`;
+  if (!Number.isFinite(cfg.payoutTotal) || cfg.payoutTotal <= cfg.stake) return "Total payout must be greater than the stake (1).";
+  if (!Number.isInteger(cfg.lookback) || cfg.lookback < 20) return "Lookback must be a whole number of at least 20 ticks.";
+  if (!Number.isInteger(cfg.duration) || cfg.duration < 1) return "Duration must be a whole number of at least 1 tick.";
+  const b = theoreticalP(cfg.contract, cfg.barrier);
+  if (!(b > 0 && b < 1)) return "This contract/barrier can never win or never lose (e.g. Under 0, Over 9).";
+  if (cfg.lookback * 3 > n * cfg.trainFrac) return "Lookback is too long for the loaded history; lower it or load more ticks.";
+  return null;
+}
 
 export function runBacktest(cfg: BacktestConfig, prices: number[], digits: number[]) {
   const N = prices.length;

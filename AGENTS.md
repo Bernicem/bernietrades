@@ -12,3 +12,4 @@
 ## Architecture
 - Statistics, backtesting and the Deriv connection live in `src/lib/` (stats.ts, backtest.ts, deriv.ts), separate from UI in `src/components/deriv/` — keeps calculations pure and testable.
 - Live data uses Deriv's public options WebSocket (`wss://api.derivws.com/trading/v1/options/ws/public`, no auth); the legacy `ws.derivws.com` endpoint is unreachable. Never show simulated data.
+- Undefined metrics (no data, zero trades, impossible contracts) are NaN in `src/lib` and render as "—" via `fx`/`pct`; feed freshness comes only from `feedState` in `src/lib/ticks.ts` — keeps empty/stale data from looking like real results.
