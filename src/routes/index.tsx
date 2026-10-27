@@ -119,6 +119,7 @@ function Index() {
         <ShieldAlert className="h-5 w-5 shrink-0 text-warning" />
         <p><b className="text-foreground">Analytical tool, not a profit system.</b> Historical patterns do not guarantee future outcomes. Synthetic indices are generated to behave randomly and may differ from real markets. Statistical deviations occur by chance, a high win rate does not imply positive expected value, and payouts set the break-even probability. Nothing here guarantees profitable signals — trade responsibly.</p>
       </footer>
+      <p className="mt-3 text-center text-[11px] text-muted-foreground"><b className="text-foreground">Privacy:</b> TickLens has no accounts and never asks for your Deriv login or token. Nothing you do here is stored. Prices come from Deriv's public feed; fonts load from Google Fonts (which sees your IP address); anonymous crash reports go to our hosting provider, Lovable.</p>
     </div>
   );
 }
