@@ -48,4 +48,6 @@ export function Seg<T extends string | number>({ value, options, onChange, fmt }
   );
 }
 
-export const pct = (x: number, d = 1) => `${(x * 100).toFixed(d)}%`;
+export const pct = (x: number, d = 1) => (Number.isFinite(x) ? `${(x * 100).toFixed(d)}%` : "—");
+// Fixed-decimal number that shows "—" for NaN/undefined instead of "NaN" or a fake 0.
+export const fx = (x: number | null | undefined, d = 2) => (x === null || x === undefined || !Number.isFinite(x) ? "—" : x.toFixed(d));

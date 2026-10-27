@@ -58,7 +58,8 @@ export function chiSquareUniform(counts: number[]) {
 
 // Binomial z-score of observed successes vs baseline p
 export function binomZ(successes: number, n: number, p: number): number {
-  if (n === 0) return 0;
+  // No data, or a contract whose baseline is 0% / 100% (e.g. Under 0, Over 9): no deviation is measurable.
+  if (!(n > 0) || !(p > 0 && p < 1) || !Number.isFinite(successes)) return 0;
   return (successes - n * p) / Math.sqrt(n * p * (1 - p));
 }
 
@@ -210,13 +211,16 @@ export function buildSignal(c: ContractType, prices: number[], digits: number[],
 }
 
 // --- regime ---
+export const MIN_VOL_WINDOWS = 5;
+export const MIN_SIGNAL_N = 100;
 export function volatility(prices: number[], window: number) {
   const diffs: number[] = [];
   for (let i = 1; i < prices.length; i++) diffs.push(prices[i] - prices[i - 1]);
   const recent = std(diffs.slice(-window));
   const rolling: number[] = [];
   for (let i = window; i <= diffs.length; i += Math.max(1, Math.floor(window / 5))) rolling.push(std(diffs.slice(i - window, i)));
-  const pct = percentileRank(rolling, recent);
+  // Need several rolling windows before a percentile means anything; otherwise report "unknown" (NaN).
+  const pct = rolling.length >= MIN_VOL_WINDOWS ? percentileRank(rolling, recent) : NaN;
   const hist = std(diffs);
   return { recent, hist, pct, ratio: hist ? recent / hist : 1, rolling, avgAbs: mean(diffs.slice(-window).map(Math.abs)) };
 }
@@ -245,9 +249,15 @@ export function detectRegime(prices: number[], digits: number[], window: number)
   const tags: string[] = [];
   if (v.pct > 0.85) tags.push("High volatility");
   else if (v.pct < 0.15) tags.push("Low volatility");
-  if (Math.abs(zDir) > 2.33) tags.push("Directional momentum");
+  if (rf.n >= MIN_SIGNAL_N && Math.abs(zDir) > 2.33) tags.push("Directional momentum");
   if (chi.adequate && chi.pValue < 0.01) tags.push("Digit distribution imbalance");
   if (cp.score > 3.5) tags.push("Potential structural change");
-  if (!tags.length) tags.push(chi.adequate ? "Random-like / stable distribution" : "Insufficient data");
+  if (!tags.length) tags.push(chi.adequate && Number.isFinite(v.pct) ? "Random-like / stable distribution" : "Insufficient data");
   return { tags, vol: v, chi, zDir, cp };
+}
+
+// Rank signals by |z|, but never let an "Insufficient Data" row outrank a result with enough samples.
+export function rankSignals<T extends { z: number; strength: Strength }>(list: T[]): T[] {
+  const ok = (s: T) => (s.strength === "Insufficient Data" ? 0 : 1);
+  return list.slice().sort((a, b) => ok(b) - ok(a) || Math.abs(b.z) - Math.abs(a.z));
 }
