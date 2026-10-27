@@ -76,7 +76,7 @@ function Index() {
         <Stat label={marketName} value={last ? last.quote.toFixed(info ? Math.max(0, Math.round(-Math.log10(info.pip))) : 2) : "—"} tone={move > 0 ? "up" : move < 0 ? "down" : undefined} />
         <Stat label="Last digit" value={last ? last.digit : "—"} />
         <Stat label="Tick change" value={last && prev ? (move > 0 ? "+" : "") + move.toFixed(4) : "—"} tone={move > 0 ? "up" : move < 0 ? "down" : undefined} />
-        <Stat label="Last tick" value={last ? new Date(last.epoch * 1000).toLocaleTimeString() : "—"} sub={Number.isFinite(stale) ? `${stale.toFixed(0)}s ago` : ""} tone={stale > 10 ? "warn" : undefined} />
+        <Stat label="Last tick" value={last ? new Date(last.epoch * 1000).toLocaleTimeString() : "—"} sub={Number.isFinite(stale) ? `${Math.max(0, stale).toFixed(0)}s ago` : ""} tone={stale > 10 ? "warn" : undefined} />
         <Stat label="Ticks loaded" value={ticks.length} sub={`analysing ${window}`} />
         <Stat label="Mode" value={live ? "Live" : "Paused"} tone={live ? "up" : "warn"} />
       </div>
