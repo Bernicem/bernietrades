@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { baselineEV, breakEvenP, estimatePayout, payoutKey, payoutWarnings } from "../payouts";
 import { digitWins } from "../stats";
-import { simulate } from "../backtest";
 
 describe("per-contract payouts", () => {
   it("Matches at total payout 9: baseline EV −0.10, break-even ≈ 11.1%", () => {
@@ -30,8 +29,5 @@ describe("per-contract payouts", () => {
   });
   it("Matches 7 wins only on digit 7; Differs 7 wins on every other digit", () => {
     for (let d = 0; d < 10; d++) { expect(digitWins("MATCHES", d, 7)).toBe(d === 7); expect(digitWins("DIFFERS", d, 7)).toBe(d !== 7); }
-  });
-  it("backtest profit uses the payout passed in", () => {
-    expect(typeof simulate).toBe("function");
   });
 });

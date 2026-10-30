@@ -5,6 +5,7 @@ import {
   shannonEntropy, streaks, theoreticalP, twoSidedP, wilson, klFromUniform, rankSignals, type ContractType,
 } from "@/lib/stats";
 import { backtestInvalidReason, MIN_RELIABLE_TRADES, MIN_TRAIN_TRADES, runBacktest } from "@/lib/backtest";
+import { baselineEV, breakEvenP, estimatePayout, payoutKey, payoutWarnings } from "@/lib/payouts";
 import { fetchHistory, type SymbolInfo, type Tick } from "@/lib/deriv";
 import { Panel, Seg, Stat, StrengthBadge, fx, pct } from "./ui";
 
@@ -378,7 +379,12 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
   const [barrier, setBarrier] = useState(5);
   const [lookback, setLookback] = useState(100);
   const [duration, setDuration] = useState(1);
-  const [payout, setPayout] = useState(1.95);
+  const [payouts, setPayouts] = useState<Record<string, number>>({});
+  const pKey = payoutKey(contract, barrier);
+  const payout = payouts[pKey] ?? estimatePayout(contract, barrier);
+  const isEstimate = payouts[pKey] === undefined;
+  const pLabel = needsBarrier(contract) ? `${contract} ${barrier}` : contract;
+  const pWarn = payoutWarnings(contract, barrier, payout);
   const [res, setRes] = useState<(ReturnType<typeof runBacktest> & { ranAt: string }) | null>(null);
   const prices = ticks.map((t) => t.quote), digits = ticks.map((t) => t.digit);
   const cfg = { contract, barrier, lookback, duration, zCandidates: [1, 1.5, 2, 2.5, 3], trainFrac: 0.6, stake: 1, payoutTotal: payout };
@@ -393,7 +399,9 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
           {needsBarrier(contract) && <div><div className="mb-1 text-xs text-muted-foreground">Digit / threshold</div><Seg value={barrier} options={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]} onChange={setBarrier} /></div>}
           <label className="flex items-center justify-between">Signal lookback (ticks)<input type="number" className={input} value={lookback} min={20} onChange={(e) => setLookback(Math.floor(+e.target.value) || 0)} /></label>
           <label className="flex items-center justify-between">Duration (ticks)<input type="number" className={input} value={duration} min={1} max={10} onChange={(e) => setDuration(Math.min(10, Math.floor(+e.target.value) || 0))} /></label>
-          <label className="flex items-center justify-between">Total payout per 1 stake<input type="number" step="0.01" className={input} value={payout} onChange={(e) => setPayout(+e.target.value)} /></label>
+          <label className="flex items-center justify-between">Payout for {pLabel} — total return per 1 stake (incl. stake)<input type="number" step="0.01" className={input} value={Number.isFinite(payout) ? payout : ""} onChange={(e) => setPayouts((m) => ({ ...m, [pKey]: +e.target.value }))} /></label>
+          <p className="text-xs text-muted-foreground">{isEstimate ? "Illustrative estimate, not an actual Deriv payout — enter the payout Deriv quotes you." : "Your entered value."} A win returns {Number.isFinite(payout) ? payout : "—"} (net profit {Number.isFinite(payout) ? (payout - 1).toFixed(2) : "—"}); a loss costs 1. Break-even {pct(breakEvenP(payout))}; EV at random chance {fx(baselineEV(contract, barrier, payout), 3)}. Each contract{needsBarrier(contract) ? " and digit" : ""} keeps its own payout.{!isEstimate && <button type="button" className="ml-1 underline" onClick={() => setPayouts((m) => { const n = { ...m }; delete n[pKey]; return n; })}>Reset to estimate</button>}</p>
+          {pWarn.map((w) => <p key={w} className="text-xs text-warning">⚠ {w}</p>)}
           <p className="text-xs text-muted-foreground">Entry rule: enter when the contract's past-window z ≥ threshold. Threshold chosen on the first 60% (train) and reported once on the last 40% (test); walk-forward runs inside the train part. Signals use only past ticks. Data: {ticks.length} ticks.</p>
           {invalid && <p className="text-xs text-warning">{invalid}</p>}
           <button onClick={run} disabled={!!invalid} className="w-full rounded bg-primary py-2 text-sm font-semibold text-primary-foreground disabled:opacity-40">Run backtest</button>
