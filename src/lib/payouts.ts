@@ -35,3 +35,9 @@ export function payoutWarnings(c: ContractType, barrier: number, payoutTotal: nu
   else if (ev < -0.25) w.push(`At this payout break-even is ${(be * 100).toFixed(1)}% but ${label} only wins about ${(p * 100).toFixed(0)}% by chance (EV ${ev.toFixed(3)} per stake). This payout looks too low for ${label}.`);
   return w;
 }
+
+// Settings that produced a backtest run, so results can be labelled and flagged as outdated.
+export interface RunSettings { contract: ContractType; barrier: number | null; payout: number }
+export const runSettings = (c: ContractType, barrier: number, payout: number): RunSettings => ({ contract: c, barrier: needsBarrier(c) ? barrier : null, payout });
+export const runLabel = (s: RunSettings) => (s.barrier === null ? s.contract : `${s.contract} ${s.barrier}`);
+export const settingsChanged = (ran: RunSettings, now: RunSettings) => ran.contract !== now.contract || ran.barrier !== now.barrier || ran.payout !== now.payout;
