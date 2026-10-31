@@ -5,7 +5,7 @@ import {
   shannonEntropy, streaks, theoreticalP, twoSidedP, wilson, klFromUniform, rankSignals, type ContractType,
 } from "@/lib/stats";
 import { backtestInvalidReason, MIN_RELIABLE_TRADES, MIN_TRAIN_TRADES, runBacktest } from "@/lib/backtest";
-import { baselineEV, breakEvenP, estimatePayout, payoutKey, payoutWarnings } from "@/lib/payouts";
+import { baselineEV, breakEvenP, estimatePayout, payoutKey, payoutWarnings, runLabel, runSettings, settingsChanged, type RunSettings } from "@/lib/payouts";
 import { fetchHistory, type SymbolInfo, type Tick } from "@/lib/deriv";
 import { Panel, Seg, Stat, StrengthBadge, fx, pct } from "./ui";
 
@@ -385,11 +385,13 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
   const isEstimate = payouts[pKey] === undefined;
   const pLabel = needsBarrier(contract) ? `${contract} ${barrier}` : contract;
   const pWarn = payoutWarnings(contract, barrier, payout);
-  const [res, setRes] = useState<(ReturnType<typeof runBacktest> & { ranAt: string }) | null>(null);
+  const [res, setRes] = useState<(ReturnType<typeof runBacktest> & { ranAt: string; settings: RunSettings }) | null>(null);
+  const current = runSettings(contract, barrier, payout);
+  const outdated = res !== null && settingsChanged(res.settings, current);
   const prices = ticks.map((t) => t.quote), digits = ticks.map((t) => t.digit);
   const cfg = { contract, barrier, lookback, duration, zCandidates: [1, 1.5, 2, 2.5, 3], trainFrac: 0.6, stake: 1, payoutTotal: payout };
   const invalid = backtestInvalidReason(cfg, prices.length);
-  const run = () => { if (!invalid) setRes({ ...runBacktest(cfg, prices, digits), ranAt: new Date().toLocaleTimeString() }); };
+  const run = () => { if (!invalid) setRes({ ...runBacktest(cfg, prices, digits), ranAt: new Date().toLocaleTimeString(), settings: current }); };
   const input = "num w-24 rounded border border-input bg-background px-2 py-1 text-sm";
   return (
     <div className="grid gap-4 lg:grid-cols-3">
@@ -399,8 +401,8 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
           {needsBarrier(contract) && <div><div className="mb-1 text-xs text-muted-foreground">Digit / threshold</div><Seg value={barrier} options={[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]} onChange={setBarrier} /></div>}
           <label className="flex items-center justify-between">Signal lookback (ticks)<input type="number" className={input} value={lookback} min={20} onChange={(e) => setLookback(Math.floor(+e.target.value) || 0)} /></label>
           <label className="flex items-center justify-between">Duration (ticks)<input type="number" className={input} value={duration} min={1} max={10} onChange={(e) => setDuration(Math.min(10, Math.floor(+e.target.value) || 0))} /></label>
-          <label className="flex items-center justify-between">Payout for {pLabel} — total return per 1 stake (incl. stake)<input type="number" step="0.01" className={input} value={Number.isFinite(payout) ? payout : ""} onChange={(e) => setPayouts((m) => ({ ...m, [pKey]: +e.target.value }))} /></label>
-          <p className="text-xs text-muted-foreground">{isEstimate ? "Illustrative estimate, not an actual Deriv payout — enter the payout Deriv quotes you." : "Your entered value."} A win returns {Number.isFinite(payout) ? payout : "—"} (net profit {Number.isFinite(payout) ? (payout - 1).toFixed(2) : "—"}); a loss costs 1. Break-even {pct(breakEvenP(payout))}; EV at random chance {fx(baselineEV(contract, barrier, payout), 3)}. Each contract{needsBarrier(contract) ? " and digit" : ""} keeps its own payout.{!isEstimate && <button type="button" className="ml-1 underline" onClick={() => setPayouts((m) => { const n = { ...m }; delete n[pKey]; return n; })}>Reset to estimate</button>}</p>
+          <label className="flex items-center justify-between">Payout for {pLabel} — total return per 1 stake (incl. stake)<span className="flex items-center gap-2">{!isEstimate && <button type="button" className="rounded border border-primary px-2 py-1 text-xs text-primary hover:bg-primary/10" onClick={() => setPayouts((m) => { const n = { ...m }; delete n[pKey]; return n; })}>Reset to estimate</button>}<input type="number" step="0.01" className={input} value={Number.isFinite(payout) ? payout : ""} onChange={(e) => setPayouts((m) => ({ ...m, [pKey]: +e.target.value }))} /></span></label>
+          <p className="text-xs text-muted-foreground">{isEstimate ? "Illustrative estimate, not an actual Deriv payout — enter the payout Deriv quotes you." : "Your entered value."} A win returns {Number.isFinite(payout) ? payout : "—"} (net profit {Number.isFinite(payout) ? (payout - 1).toFixed(2) : "—"}); a loss costs 1. Break-even {pct(breakEvenP(payout))}; EV at random chance {fx(baselineEV(contract, barrier, payout), 3)}. Each contract{needsBarrier(contract) ? " and digit" : ""} keeps its own payout.</p>
           {pWarn.map((w) => <p key={w} className="text-xs text-warning">⚠ {w}</p>)}
           <p className="text-xs text-muted-foreground">Entry rule: enter when the contract's past-window z ≥ threshold. Threshold chosen on the first 60% (train) and reported once on the last 40% (test); walk-forward runs inside the train part. Signals use only past ticks. Data: {ticks.length} ticks.</p>
           {invalid && <p className="text-xs text-warning">{invalid}</p>}
@@ -410,6 +412,8 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
       {res ? (
         <>
           <Panel title="Out-of-sample (test) results" className="lg:col-span-2">
+            <p className="mb-2 text-sm font-semibold">Results for {runLabel(res.settings)} at total payout {res.settings.payout}.</p>
+            {outdated && <p role="status" className="mb-2 rounded border border-warning/60 bg-warning/10 p-2 text-sm text-warning">These results are for {runLabel(res.settings)} at payout {res.settings.payout}. Your settings have changed — press Run backtest to update.</p>}
             <p className="mb-2 text-xs text-muted-foreground">Run at {res.ranAt} on {res.N} ticks. New ticks since then are not included — press Run again to refresh.</p>
             {res.test === null ? (
               <p className="text-sm">Insufficient data: no threshold produced at least {MIN_TRAIN_TRADES} trades in the training period, so no strategy could be selected or tested. Load more ticks or lower the lookback.</p>
@@ -425,7 +429,7 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
               <Stat label="Sharpe / trade" value={fx(res.test.sharpe, 3)} sub={Number.isFinite(res.test.sharpe) ? undefined : "needs ≥2 trades with varied results"} />
             </div>
             <div className="mt-4 h-48"><ResponsiveContainer><LineChart data={res.test.equity.map((v, i) => ({ i, v }))}><CartesianGrid stroke="var(--border)" vertical={false} /><XAxis dataKey="i" {...axis} /><YAxis {...axis} /><Tooltip {...tip} /><ReferenceLine y={0} stroke="var(--muted-foreground)" /><Line dataKey="v" stroke={res.test.ev > 0 ? "var(--success)" : "var(--destructive)"} dot={false} isAnimationActive={false} name="Equity" /></LineChart></ResponsiveContainer></div>
-            <p className="mt-2 text-sm">{res.test.trades === 0 ? "No eligible trades in the test period." : res.test.trades < MIN_RELIABLE_TRADES ? `Insufficient data: only ${res.test.trades} test trades (need at least ${MIN_RELIABLE_TRADES}).` : res.test.ev <= 0 ? `This strategy has not demonstrated a profitable edge at a total payout of ${payout}. It lost on average ${Math.abs(res.test.ev).toFixed(3)} per 1 stake; you need to win more than ${pct(res.breakEven)} of trades just to break even.` : res.test.ci[0] > res.breakEven ? "Positive out-of-sample EV with win-rate CI above break-even — still treat with caution." : `Positive EV, but the win-rate range still includes the ${pct(res.breakEven)} break-even, so it could be luck.`}</p>
+            <p className="mt-2 text-sm">{res.test.trades === 0 ? "No eligible trades in the test period." : res.test.trades < MIN_RELIABLE_TRADES ? `Insufficient data: only ${res.test.trades} test trades (need at least ${MIN_RELIABLE_TRADES}).` : res.test.ev <= 0 ? `This strategy has not demonstrated a profitable edge at a total payout of ${res.settings.payout}. It lost on average ${Math.abs(res.test.ev).toFixed(3)} per 1 stake; you need to win more than ${pct(res.breakEven)} of trades just to break even.` : res.test.ci[0] > res.breakEven ? "Positive out-of-sample EV with win-rate CI above break-even — still treat with caution." : `Positive EV, but the win-rate range still includes the ${pct(res.breakEven)} break-even, so it could be luck.`}</p>
             {res.bestTrainEv !== null && res.bestTrainEv <= 0 && <p className="mt-1 text-xs text-warning">Note: even the best threshold lost money in training (EV {res.bestTrainEv.toFixed(3)}). It is shown only for reference — no threshold looked profitable.</p>}
             <p className="mt-1 text-xs text-muted-foreground">Trained on ticks 1–{res.split}, tested on ticks {res.split + 1}–{res.N}. Consecutive trades use overlapping lookback windows, so they are not fully independent and the range shown may be too narrow.</p>
             </>)}
@@ -450,7 +454,7 @@ export function BacktestPanel({ ticks }: { ticks: Tick[] }) {
               <div><dt className="font-semibold">Out-of-sample testing</dt><dd className="text-muted-foreground">The newest 40% of ticks, never used to choose anything. The chosen rule is run here once — this is the honest result.</dd></div>
               <div><dt className="font-semibold">Walk-forward validation</dt><dd className="text-muted-foreground">Repeats "choose on the past, test on the next block" several times within the training data, to see whether a choice keeps working as time moves forward.</dd></div>
               <div><dt className="font-semibold">Expected value (EV)</dt><dd className="text-muted-foreground">Average profit or loss per trade for a 1 stake. Negative EV means you lose money on average over many trades.</dd></div>
-              <div><dt className="font-semibold">Break-even probability</dt><dd className="text-muted-foreground">The win rate needed to not lose money: stake ÷ total payout. At a payout of {payout} it is {pct(res.breakEven)}. A 50% coin flip is below this, so it loses slowly.</dd></div>
+              <div><dt className="font-semibold">Break-even probability</dt><dd className="text-muted-foreground">The win rate needed to not lose money: stake ÷ total payout. At a payout of {res.settings.payout} it is {pct(res.breakEven)}. A 50% coin flip is below this, so it loses slowly.</dd></div>
               <div><dt className="font-semibold">Maximum drawdown</dt><dd className="text-muted-foreground">The biggest drop from a previous high in your running balance, in stakes. A drawdown of 16 means at one point you were 16 stakes below your best.</dd></div>
             </dl>
           </Panel>
