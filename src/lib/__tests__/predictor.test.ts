@@ -18,7 +18,7 @@ describe("predictor", () => {
   });
   it("decay weights recent digits more and smooths zeros", () => {
     const d = decayFreq([7, 7, 7, 7, 3], 5, 2, 0.5);
-    expect(d[3]).toBeGreaterThan(rollingFreq([7, 7, 7, 7, 3], 5, 5)[3]);
+    expect(decayFreq([7, 7, 7, 7, 3], 5, 2, 0)[3]).toBeGreaterThan(rollingFreq([7, 7, 7, 7, 3], 5, 5)[3]);
     expect(d[0]).toBeGreaterThan(0);
   });
   it("Markov uses the previous digit's row with Laplace smoothing", () => {
