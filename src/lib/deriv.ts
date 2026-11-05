@@ -7,8 +7,9 @@ export interface SymbolInfo { symbol: string; display_name: string; submarket_di
 export interface Tick { epoch: number; quote: number; digit: number }
 export type ConnStatus = "connecting" | "live" | "reconnecting" | "offline";
 
-const decimalsFromPip = (pip: number) => pipDecimals(pip) ?? 2;
-const dec = (msgPip: unknown, symPip: number) => pipDecimals(msgPip) ?? decimalsFromPip(symPip);
+// Precision must come from Deriv's pip metadata (pip step like 0.01, or a decimal count like 2).
+// Never assume 2 decimals: if neither source is valid, return null and reject the data.
+const dec = (msgPip: unknown, symPip: number): number | null => pipDecimals(msgPip) ?? pipDecimals(symPip);
 
 type Pending = { resolve: (v: any) => void; reject: (e: any) => void };
 
@@ -98,6 +99,7 @@ export function useSymbols() {
 export async function fetchHistory(symbol: string, count: number, pip: number): Promise<Tick[]> {
   const m = await getClient().send({ ticks_history: symbol, count, end: "latest", style: "ticks" });
   const d = dec(m.pip_size, pip);
+  if (d === null) throw new Error("Deriv sent an unrecognised price precision for this market");
   return sanitizeHistory(m.history?.prices, m.history?.times, d);
 }
 
@@ -118,6 +120,7 @@ export function useTicks(symbol: string | null, pip: number, buffer: number) {
     try {
       const m = await c.send({ ticks_history: symbol, count: Math.min(5000, buffer), end: "latest", style: "ticks", subscribe: 1 });
       const d = dec(m.pip_size, pip);
+      if (d === null) { setError("Deriv sent an unrecognised price precision for this market"); return; }
       subId.current = m.subscription?.id ?? null;
       const hist = sanitizeHistory(m.history?.prices, m.history?.times, d);
       setTicks(hist);
