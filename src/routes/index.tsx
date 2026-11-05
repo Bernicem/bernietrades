@@ -7,6 +7,7 @@ import { feedState } from "@/lib/ticks";
 import { Panel, Seg, Stat, StrengthBadge, pct } from "@/components/deriv/ui";
 import { BacktestPanel, DigitPanel, EVPanel, EvenOddPanel, IntelPanel, MatchesPanel, OverUnderPanel, RiseFallPanel, ScannerPanel, SignalsPanel } from "@/components/deriv/panels";
 import { cn } from "@/lib/utils";
+import { PredictorPanel } from "@/components/deriv/predictor-panel";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -22,7 +23,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-const TABS = ["Dashboard", "Digits", "Even/Odd", "Rise/Fall", "Matches/Differs", "Over/Under", "Intelligence", "Signals", "Scanner", "Backtest", "EV Calculator"] as const;
+const TABS = ["Dashboard", "Digits", "Even/Odd", "Rise/Fall", "Matches/Differs", "Over/Under", "Intelligence", "Signals", "Scanner", "Backtest", "EV Calculator", "Predictor"] as const;
 type Tab = (typeof TABS)[number];
 
 function Index() {
@@ -112,6 +113,7 @@ function Index() {
           {tab === "Scanner" && <ScannerPanel symbols={symbols} window={window} live={status === "live"} />}
           {tab === "Backtest" && <BacktestPanel key={symbol} ticks={ticks} />}
           {tab === "EV Calculator" && <EVPanel />}
+          {tab === "Predictor" && <PredictorPanel key={symbol} ticks={ticks} market={marketName} live={live} asOf={asOf} />}
         </>
       )}
 
