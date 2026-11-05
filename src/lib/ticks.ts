@@ -15,7 +15,10 @@ export function pipDecimals(v: unknown): number | null {
 const valid = (q: unknown, e: unknown): q is number => typeof q === "number" && Number.isFinite(q) && q > 0 && typeof e === "number" && Number.isFinite(e) && e > 0;
 
 // Drops non-numeric, non-finite, non-positive, duplicate and out-of-order ticks.
-export function sanitizeHistory(prices: unknown, times: unknown, decimals: number): Tick[] {
+// decimals must come from pipDecimals; null (invalid/unsupported precision) rejects everything
+// rather than guessing a precision and computing wrong last digits.
+export function sanitizeHistory(prices: unknown, times: unknown, decimals: number | null): Tick[] {
+  if (decimals === null) return [];
   if (!Array.isArray(prices) || !Array.isArray(times)) return [];
   const out: Tick[] = [];
   for (let i = 0; i < Math.min(prices.length, times.length); i++) {
@@ -27,7 +30,8 @@ export function sanitizeHistory(prices: unknown, times: unknown, decimals: numbe
   return out;
 }
 
-export function parseLiveTick(t: unknown, decimals: number): Tick | null {
+export function parseLiveTick(t: unknown, decimals: number | null): Tick | null {
+  if (decimals === null) return null; // unknown precision: never guess the last digit
   if (!t || typeof t !== "object") return null;
   const { quote, epoch } = t as { quote: unknown; epoch: unknown };
   return valid(quote, epoch) ? { epoch: epoch as number, quote, digit: lastDigit(quote, decimals) } : null;
