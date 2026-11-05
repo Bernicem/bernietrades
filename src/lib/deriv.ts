@@ -120,6 +120,7 @@ export function useTicks(symbol: string | null, pip: number, buffer: number) {
     try {
       const m = await c.send({ ticks_history: symbol, count: Math.min(5000, buffer), end: "latest", style: "ticks", subscribe: 1 });
       const d = dec(m.pip_size, pip);
+      if (d === null) { setError("Deriv sent an unrecognised price precision for this market"); return; }
       subId.current = m.subscription?.id ?? null;
       const hist = sanitizeHistory(m.history?.prices, m.history?.times, d);
       setTicks(hist);
