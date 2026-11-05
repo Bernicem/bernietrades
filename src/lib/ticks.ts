@@ -4,6 +4,14 @@ import type { ConnStatus, Tick } from "./deriv";
 
 export const STALE_AFTER_SEC = 10;
 
+// Deriv sends precision in two formats: active_symbols gives a fractional pip (0.01, 0.001),
+// ticks / ticks_history give a decimal count (2, 3). Accept either; null if unusable.
+export function pipDecimals(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) return null;
+  if (v < 1) return Math.max(0, Math.round(-Math.log10(v)));
+  return Number.isInteger(v) && v <= 10 ? v : null;
+}
+
 const valid = (q: unknown, e: unknown): q is number => typeof q === "number" && Number.isFinite(q) && q > 0 && typeof e === "number" && Number.isFinite(e) && e > 0;
 
 // Drops non-numeric, non-finite, non-positive, duplicate and out-of-order ticks.
