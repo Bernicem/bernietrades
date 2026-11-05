@@ -44,13 +44,14 @@ export function decayFreq(digits: number[], end: number, halfLife: number, alpha
   return normalize(c);
 }
 
-// Model C: P(next | previous) from transitions inside the last `window` digits, Laplace `alpha`.
+// Model C: P(next | previous) from transitions whose both digits lie inside the last `window` digits
+// (digits[end-window..end-1] → exactly window-1 transitions), Laplace `alpha`.
 export function markovRow(digits: number[], end: number, window: number, alpha = 1): { dist: Dist; rowCount: number; prev: number | null } {
   if (end < 1) return { dist: uniform(), rowCount: 0, prev: null };
   const prev = digits[end - 1];
   const c = Array(10).fill(alpha);
   let rowCount = 0;
-  for (let i = Math.max(1, end - window); i < end; i++) if (digits[i - 1] === prev) { c[digits[i]]++; rowCount++; }
+  for (let i = Math.max(1, end - window + 1); i < end; i++) if (digits[i - 1] === prev) { c[digits[i]]++; rowCount++; }
   return { dist: normalize(c), rowCount, prev };
 }
 

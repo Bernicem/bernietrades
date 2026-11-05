@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { parseLiveTick, sanitizeHistory } from "./ticks";
+import { parseLiveTick, pipDecimals, sanitizeHistory } from "./ticks";
 
 const WS_URL = "wss://api.derivws.com/trading/v1/options/ws/public";
 
@@ -7,7 +7,8 @@ export interface SymbolInfo { symbol: string; display_name: string; submarket_di
 export interface Tick { epoch: number; quote: number; digit: number }
 export type ConnStatus = "connecting" | "live" | "reconnecting" | "offline";
 
-const decimalsFromPip = (pip: number) => Math.max(0, Math.round(-Math.log10(pip)));
+const decimalsFromPip = (pip: number) => pipDecimals(pip) ?? 2;
+const dec = (msgPip: unknown, symPip: number) => pipDecimals(msgPip) ?? decimalsFromPip(symPip);
 
 type Pending = { resolve: (v: any) => void; reject: (e: any) => void };
 
@@ -96,8 +97,8 @@ export function useSymbols() {
 
 export async function fetchHistory(symbol: string, count: number, pip: number): Promise<Tick[]> {
   const m = await getClient().send({ ticks_history: symbol, count, end: "latest", style: "ticks" });
-  const dec = m.pip_size ?? decimalsFromPip(pip);
-  return sanitizeHistory(m.history?.prices, m.history?.times, dec);
+  const d = dec(m.pip_size, pip);
+  return sanitizeHistory(m.history?.prices, m.history?.times, d);
 }
 
 // Live stream: history + subscription; dedupes by epoch and preserves order.
@@ -116,9 +117,9 @@ export function useTicks(symbol: string | null, pip: number, buffer: number) {
     subId.current = null;
     try {
       const m = await c.send({ ticks_history: symbol, count: Math.min(5000, buffer), end: "latest", style: "ticks", subscribe: 1 });
-      const dec = m.pip_size ?? decimalsFromPip(pip);
+      const d = dec(m.pip_size, pip);
       subId.current = m.subscription?.id ?? null;
-      const hist = sanitizeHistory(m.history?.prices, m.history?.times, dec);
+      const hist = sanitizeHistory(m.history?.prices, m.history?.times, d);
       setTicks(hist);
       if (hist.length) setLastAt(Date.now()); else setError("Deriv returned no valid ticks for this market");
     } catch (e: any) { setError(e?.message ?? "Failed to load ticks"); }
@@ -129,7 +130,7 @@ export function useTicks(symbol: string | null, pip: number, buffer: number) {
     const c = getClient();
     const onMsg = (m: any) => {
       if (m.msg_type !== "tick" || !m.tick || m.tick.symbol !== symbol) return;
-      const tick = parseLiveTick(m.tick, m.tick.pip_size ?? decimalsFromPip(pip));
+      const tick = parseLiveTick(m.tick, dec(m.tick.pip_size, pip));
       if (!tick) return; // invalid tick: ignore rather than analyse garbage
       setTicks((prev) => {
         const last = prev[prev.length - 1];
